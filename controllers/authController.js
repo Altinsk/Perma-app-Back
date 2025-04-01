@@ -1,0 +1,91 @@
+const { successResponse, errorResponse } = require("../utils/responseHelper");
+const bcrypt = require("bcrypt");
+const User = require("../models/user");
+const {
+  sendVerificationEmail,
+  sendResetPasswordEmail,
+} = require("../utils/emailService");
+const {
+  generateToken,
+  generateResetToken,
+  verifyToken,
+  verifyResetToken,
+} = require("../utils/tokenService");
+
+exports.register = async (req, res) => {
+  const { firstName, lastName, email, password } = req.body;
+  let Existinguser = await User.findOne({ where: { Email: email } });
+  if (Existinguser)
+    return errorResponse(res, "User already exists", "Duplicate Email", 200);
+  const salt = await bcrypt.genSalt(10);
+  const hash = await bcrypt.hash(password, salt);
+  try {
+    const user = await User.create({
+      FirstName: firstName,
+      LastName: lastName,
+      Email: email,
+      PasswordHash: hash,
+      PasswordSalt: salt,
+      DateLastUpdated: new Date(),
+    });
+    const token = await generateToken(user.Email);
+    await sendVerificationEmail(user.Email, token);
+    successResponse(res, "User registered, check email for verification");
+  } catch (err) {
+    errorResponse(res, err.message, err, 500);
+  }
+};
+
+exports.verifyEmail = async (req, res) => {
+  try {
+    const { token } = req.params;
+    const email = await verifyToken(token);
+    await User.update(
+      { Verified: true, DateLastUpdated: new Date() },
+      { where: { Email: email } }
+    );
+    successResponse(res, "Email verified successfully");
+  } catch (error) {
+    errorResponse(res, "Invalid or expired token", err, 400);
+  }
+};
+
+exports.login = async (req, res) => {
+  const { email, password } = req.body;
+  const user = await User.findOne({ where: { Email: email } });
+  if (!user) return errorResponse(res, "User doesn't exist.", null, 401);
+
+  if (!user.Verified)
+    return errorResponse(res, "Please verify your email first.", null, 401);
+
+  if (!(await bcrypt.compare(password, user.PasswordHash)))
+    return errorResponse(res, "Invalid credentials", null, 401);
+  await User.update({ DateLastLogin: new Date() }, { where: { Email: email } });
+  const accessToken = await generateToken(user.Email);
+  successResponse(res, "login successfull!!", { accessToken }, user.UserId);
+};
+
+exports.forgotPassword = async (req, res) => {
+  const { email } = req.body;
+  const user = await User.findOne({ where: { Email: email } });
+  if (!user) return errorResponse(res, "User not found", null, 404);
+  const token = await generateResetToken(user.Email);
+  await sendResetPasswordEmail(email, token);
+  successResponse(res, "Reset link sent");
+};
+
+exports.resetPassword = async (req, res) => {
+  const { token, newPassword } = req.body;
+  try {
+    const email = await verifyResetToken(token);
+    const salt = bcrypt.genSaltSync(10);
+    const hash = bcrypt.hashSync(newPassword, salt);
+    await User.update(
+      { PasswordHash: hash, PasswordSalt: salt, DateLastUpdated: new Date() },
+      { where: { Email: email } }
+    );
+    successResponse(res, "Password reset successfully");
+  } catch (error) {
+    errorResponse(res, "Invalid or expired token", error, 400);
+  }
+};
