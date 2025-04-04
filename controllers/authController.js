@@ -1,5 +1,6 @@
 const { successResponse, errorResponse } = require("../utils/responseHelper");
 const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
 const User = require("../models/user");
 const {
   sendVerificationEmail,
@@ -11,11 +12,22 @@ const {
   verifyToken,
   verifyResetToken,
 } = require("../utils/tokenService");
+const { Op } = require("sequelize");
 
 exports.register = async (req, res) => {
   const { firstName, lastName, email, password } = req.body;
-  let Existinguser = await User.findOne({ where: { Email: email } });
-  if (Existinguser)
+  const checkUserEmailSimple = await User.findOne({
+    where: { [Op.and]: [{ Email: email }, { loginType: "google" }] },
+  });
+  if (checkUserEmailSimple)
+    return errorResponse(
+      res,
+      "This email is associated with a Google account. Please try logging in using the Google Sign-In option.",
+      null,
+      200
+    );
+  let ExistingUser = await User.findOne({ where: { Email: email } });
+  if (ExistingUser)
     return errorResponse(res, "User already exists", "Duplicate Email", 200);
   const salt = await bcrypt.genSalt(10);
   const hash = await bcrypt.hash(password, salt);
@@ -27,6 +39,8 @@ exports.register = async (req, res) => {
       PasswordHash: hash,
       PasswordSalt: salt,
       DateLastUpdated: new Date(),
+      loginType: "native",
+      AuthToken: null,
     });
     const token = await generateToken(user.Email);
     await sendVerificationEmail(user.Email, token);
@@ -52,6 +66,16 @@ exports.verifyEmail = async (req, res) => {
 
 exports.login = async (req, res) => {
   const { email, password } = req.body;
+  const checkUserEmailSimple = await User.findOne({
+    where: { [Op.and]: [{ Email: email }, { loginType: "google" }] },
+  });
+  if (checkUserEmailSimple)
+    return errorResponse(
+      res,
+      "This email is associated with a Google account. Please try logging in using the Google Sign-In option.",
+      null,
+      401
+    );
   const user = await User.findOne({ where: { Email: email } });
   if (!user) return errorResponse(res, "User doesn't exist.", null, 401);
 
